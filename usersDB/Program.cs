@@ -5,76 +5,70 @@ class Program
 {
     static void Main()
     {
-        // ข้อมูลการเชื่อมต่อ
         string connString = "Host=localhost;Username=postgres;Password=123456789;Database=postgres";
 
         using (var conn = new NpgsqlConnection(connString))
         {
             conn.Open();
 
-            // ตั้งค่า search_path ให้ชี้ไปที่ schema ของคุณ
             using (var setSearchPathCmd = new NpgsqlCommand("SET search_path TO schema;", conn))
             {
                 setSearchPathCmd.ExecuteNonQuery();
             }
 
-            // เริ่มต้น Transaction
+            string userName = "Michael Brown";
+
+            // ดึง user_id จากฐานข้อมูล
+            string selectUserQuery = "SELECT user_id FROM users WHERE name = @name";
+            object userId = null;
+
+            using (var cmd = new NpgsqlCommand(selectUserQuery, conn))
+            {
+                cmd.Parameters.AddWithValue("name", userName);
+                userId = cmd.ExecuteScalar();
+            }
+
+            if (userId == null)
+            {
+                Console.WriteLine("User not found.");
+                return;
+            }
+
+            // เริ่มต้น
             using (var transaction = conn.BeginTransaction())
             {
                 try
                 {
-                    // กำหนดชื่อที่ต้องการค้นหา
-                    string userName = "Michael Brown";
+                    float newWeight = 40; 
+                    float newHeight = 160;
 
-                    // ค้นหาชื่อในตาราง users
-                    string selectUserQuery = "SELECT user_id FROM users WHERE name = @name";
-                    using (var cmd = new NpgsqlCommand(selectUserQuery, conn))
+                    // อัปเดตข้อมูลใน user_details
+                    string updateQuery = "UPDATE user_details SET weight = @weight, height = @height WHERE user_id = @user_id";
+                    using (var updateCmd = new NpgsqlCommand(updateQuery, conn, transaction))
                     {
-                        cmd.Parameters.AddWithValue("name", userName);
-                        var userId = cmd.ExecuteScalar();
-
-                        // ถ้าไม่พบชื่อใน users ให้แจ้งว่าไม่พบและ Rollback
-                        if (userId == null)
-                        {
-                            Console.WriteLine("User not found.");
-                            transaction.Rollback();
-                            return;
-                        }
-
-                        // กำหนดน้ำหนักและความสูงใหม่
-                        float newWeight = 55;  
-                        float newHeight = 150; 
-
-                        // ตรวจสอบน้ำหนักก่อน
-                        if (newWeight < 50)
-                        {
-                            Console.WriteLine("Error: Weight is less than 50.");
-                            transaction.Rollback();
-                            return;
-                        }
-
-                        // อัปเดตข้อมูลใน user_details
-                        string updateQuery = "UPDATE user_details SET weight = @weight, height = @height WHERE user_id = @user_id";
-                        using (var updateCmd = new NpgsqlCommand(updateQuery, conn))
-                        {
-                            updateCmd.Parameters.AddWithValue("weight", newWeight);
-                            updateCmd.Parameters.AddWithValue("height", newHeight);
-                            updateCmd.Parameters.AddWithValue("user_id", userId);
-                            updateCmd.ExecuteNonQuery();
-                        }
-
-                        // ทำการ Commit หากไม่มีข้อผิดพลาด
-                        transaction.Commit();
-                        Console.WriteLine("User details updated successfully.");
+                        updateCmd.Parameters.AddWithValue("weight", newWeight);
+                        updateCmd.Parameters.AddWithValue("height", newHeight);
+                        updateCmd.Parameters.AddWithValue("user_id", userId);
+                        updateCmd.ExecuteNonQuery();
                     }
-                }
-                catch (Npgsql.PostgresException ex)
-                {
-                    Console.WriteLine($"Postgres Error: {ex.Message}");
-                    Console.WriteLine($"Error Code: {ex.SqlState}");
-                    transaction.Rollback();
-                }
 
+                    // ตรวจสอบเงื่อนไขหลังจากการอัปเดต
+                    if (newWeight < 50)
+                    {
+                        Console.WriteLine("Warning: Weight is less than 50.");
+                        throw new InvalidOperationException("Invalid weight. Rolling back transaction.");
+                    }
+
+                    // หากไม่มีข้อผิดพลาด ให้ Commit
+                    transaction.Commit();
+                    Console.WriteLine("User details updated successfully.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error: {ex.Message}");
+                    transaction.Rollback();
+                    Console.WriteLine("Transaction rolled back.");
+                }
             }
         }
     }
